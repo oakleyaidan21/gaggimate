@@ -26,7 +26,7 @@ void ShotUploadPlugin::setup(Controller *c, PluginManager *pluginManager) {
 
     pluginManager->on("controller:wifi:connect", [this](Event const &) {
         if (controller->getSettings().isShotUploadActive()) {
-            wakeServer();
+            enqueueWake();
         }
     });
 
@@ -47,7 +47,7 @@ void ShotUploadPlugin::uploadPending() {
 }
 
 void ShotUploadPlugin::enqueueUpload(const String &shotId) {
-    if (uploadQueue == nullptr) {
+    if (uploadQueue == nullptr || shotId.isEmpty()) {
         return;
     }
     char *copy = strdup(shotId.c_str());
@@ -58,6 +58,22 @@ void ShotUploadPlugin::enqueueUpload(const String &shotId) {
     if (xQueueSend(uploadQueue, &copy, 0) != pdTRUE) {
         free(copy);
         ESP_LOGW("ShotUpload", "Upload queue full; dropping shot %s", shotId.c_str());
+    }
+}
+
+void ShotUploadPlugin::enqueueWake() {
+    if (uploadQueue == nullptr) {
+        return;
+    }
+    // Empty string is the wake-only sentinel (real shot ids are never empty).
+    char *copy = strdup("");
+    if (copy == nullptr) {
+        ESP_LOGE("ShotUpload", "Out of memory queuing wake");
+        return;
+    }
+    if (xQueueSend(uploadQueue, &copy, 0) != pdTRUE) {
+        free(copy);
+        ESP_LOGW("ShotUpload", "Upload queue full; dropping wake");
     }
 }
 
@@ -111,12 +127,17 @@ String ShotUploadPlugin::buildPayload(const String &shotId) {
     }
 
     ShotLogHeader header{};
-    size_t read = file.read(reinterpret_cast<uint8_t *>(&header), sizeof(header));
-    file.close();
-    if (read != sizeof(header) || header.magic != SHOT_LOG_MAGIC) {
+    size_t nread = file.read(reinterpret_cast<uint8_t *>(&header), sizeof(header));
+    if (nread != sizeof(header) || header.magic != SHOT_LOG_MAGIC) {
+        file.close();
         ESP_LOGE("ShotUpload", "Bad slog header for %s", shotId.c_str());
         return "";
     }
+
+    // Resolve yield: BT scale header → notes doseOut → last sample BT/estimated weight.
+    // header.finalWeight is only written from Bluetooth scale weight, so no-scale
+    // shots need the sample/notes fallbacks.
+    float yieldG = header.finalWeight > 0 ? static_cast<float>(header.finalWeight) / 10.0f : 0.0f;
 
     JsonDocument notes;
     String notesPath = "/h/" + shotId + ".json";
@@ -127,6 +148,28 @@ String ShotUploadPlugin::buildPayload(const String &shotId) {
             nf.close();
         }
     }
+    if (yieldG <= 0.0f && !notes["doseOut"].isNull()) {
+        if (notes["doseOut"].is<const char *>() || notes["doseOut"].is<String>()) {
+            yieldG = notes["doseOut"].as<String>().toFloat();
+        } else {
+            yieldG = notes["doseOut"].as<float>();
+        }
+    }
+    if (yieldG <= 0.0f && header.sampleCount > 0) {
+        const size_t sampleSize = header.reserved0 > 0 ? header.reserved0 : SHOT_LOG_SAMPLE_SIZE;
+        if (sampleSize == sizeof(ShotLogSample)) {
+            const size_t offset = static_cast<size_t>(header.headerSize) + (header.sampleCount - 1) * sampleSize;
+            ShotLogSample sample{};
+            if (file.seek(offset) && file.read(reinterpret_cast<uint8_t *>(&sample), sizeof(sample)) == sizeof(sample)) {
+                if (sample.v > 0) {
+                    yieldG = static_cast<float>(sample.v) / 10.0f;
+                } else if (sample.ev > 0) {
+                    yieldG = static_cast<float>(sample.ev) / 10.0f;
+                }
+            }
+        }
+    }
+    file.close();
 
     JsonDocument doc;
     JsonObject shot = doc["shot"].to<JsonObject>();
@@ -142,12 +185,15 @@ String ShotUploadPlugin::buildPayload(const String &shotId) {
     }
     shot["duration_ms"] = static_cast<int>(header.durationMs);
     shot["profile_name"] = String(header.profileName);
-    float yieldG = header.finalWeight > 0 ? static_cast<float>(header.finalWeight) / 10.0f : 0.0f;
     if (yieldG > 0.0f) {
         shot["yield"] = yieldG;
     }
     if (!notes["doseIn"].isNull()) {
-        shot["dose"] = notes["doseIn"].as<float>();
+        if (notes["doseIn"].is<const char *>() || notes["doseIn"].is<String>()) {
+            shot["dose"] = notes["doseIn"].as<String>().toFloat();
+        } else {
+            shot["dose"] = notes["doseIn"].as<float>();
+        }
     }
     if (!notes["grindSetting"].isNull()) {
         shot["grind_setting"] = notes["grindSetting"].as<const char *>();
@@ -215,7 +261,11 @@ void ShotUploadPlugin::uploadTask(void *arg) {
         if (xQueueReceive(plugin->uploadQueue, &idPtr, portMAX_DELAY) == pdTRUE && idPtr != nullptr) {
             String id(idPtr);
             free(idPtr);
-            plugin->postShot(id);
+            if (id.isEmpty()) {
+                plugin->wakeServer();
+            } else {
+                plugin->postShot(id);
+            }
         }
     }
 }

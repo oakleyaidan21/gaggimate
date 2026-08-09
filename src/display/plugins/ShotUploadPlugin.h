@@ -22,6 +22,8 @@ class ShotUploadPlugin : public Plugin {
 
   private:
     void enqueueUpload(const String &shotId);
+    // Queue a background wake ping (empty shot id sentinel). Never call wakeServer on the UI/main loop.
+    void enqueueWake();
     void wakeServer();
     bool postShot(const String &shotId);
     String buildPayload(const String &shotId);
