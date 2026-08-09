@@ -20,8 +20,9 @@ constexpr uint32_t MAX_TIMESERIES_SAMPLES = 120;
 
 ShotUploadPlugin ShotUpload;
 
-void ShotUploadPlugin::setup(Controller *c, PluginManager *pluginManager) {
+void ShotUploadPlugin::setup(Controller *c, PluginManager *pm) {
     controller = c;
+    pluginManager = pm;
     uploadQueue = xQueueCreate(UPLOAD_QUEUE_LEN, sizeof(char *));
     xTaskCreatePinnedToCore(uploadTask, "ShotUpload", configMINIMAL_STACK_SIZE * 8, this, 1, nullptr, 0);
 
@@ -108,6 +109,9 @@ void ShotUploadPlugin::wakeServer() {
     if (code >= 200 && code < 300) {
         lastWakeMs = millis();
         ESP_LOGI("ShotUpload", "Wake OK (%d) %s", code, wakeUrl.c_str());
+        if (pluginManager != nullptr) {
+            pluginManager->trigger("shotupload:wake:ok");
+        }
     } else {
         ESP_LOGW("ShotUpload", "Wake failed (%d) %s", code, wakeUrl.c_str());
     }

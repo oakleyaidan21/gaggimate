@@ -81,6 +81,7 @@ class DefaultUI {
     void updateMenuScreen();
     void setupUploadButton();
     void updateUploadButton();
+    void updateWakeOkIcon();
     String getErrorMessage();
 
     void adjustDials(lv_obj_t *dials);
@@ -122,6 +123,9 @@ class DefaultUI {
     lv_obj_t *uploadButton = nullptr;
     // EEZ deletes/recreates status screen widgets; remember which check_button we bound to.
     lv_obj_t *uploadButtonCheck = nullptr;
+    lv_obj_t *wakeOkIcon = nullptr;
+    // Set from any task on wake success; consumed on the UI loop.
+    volatile unsigned long wakeOkUntilMs = 0;
     float pressure = 0.0f;
     float currentTemp = 0.0f;
     float targetTemp = 0.0f;

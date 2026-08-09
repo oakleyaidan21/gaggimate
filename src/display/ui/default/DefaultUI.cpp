@@ -213,6 +213,7 @@ void DefaultUI::init() {
     pluginManager->on("controller:autotune:start", [this](Event const &) { changeScreen(SCREEN_ID_STANDBY_SCREEN); });
     pluginManager->on("controller:autotune:result", [this](Event const &) { changeScreen(SCREEN_ID_STANDBY_SCREEN); });
     pluginManager->on("shot:completed", [this](Event const &) { rerender = true; });
+    pluginManager->on("shotupload:wake:ok", [this](Event const &) { wakeOkUntilMs = ::millis() + 2500; });
 
     pluginManager->on("profiles:profile:select", [this](Event const &event) {
         reloadProfiles();
@@ -290,6 +291,7 @@ void DefaultUI::loop() {
     ui_tick();
     // After EEZ applies check_button visibility for this frame.
     updateUploadButton();
+    updateWakeOkIcon();
     lv_task_handler();
 }
 
@@ -613,6 +615,34 @@ void DefaultUI::updateUploadButton() {
             lv_obj_set_pos(objects.check_button, 0, 130);
         }
     }
+#endif
+}
+
+void DefaultUI::updateWakeOkIcon() {
+#ifndef GAGGIMATE_SIM
+    const unsigned long until = wakeOkUntilMs;
+    const bool show = until != 0 && ::millis() < until;
+    if (!show) {
+        if (until != 0) {
+            wakeOkUntilMs = 0;
+        }
+        if (wakeOkIcon != nullptr) {
+            lv_obj_add_flag(wakeOkIcon, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
+    }
+
+    if (wakeOkIcon == nullptr) {
+        wakeOkIcon = lv_img_create(lv_layer_top());
+        lv_img_set_src(wakeOkIcon, &img_check_40x40);
+        lv_img_set_zoom(wakeOkIcon, 180);
+        lv_obj_set_style_img_recolor(wakeOkIcon, lv_color_hex(0x22C55E), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_img_recolor_opa(wakeOkIcon, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_align(wakeOkIcon, LV_ALIGN_TOP_MID, 0, 8);
+        lv_obj_clear_flag(wakeOkIcon, LV_OBJ_FLAG_CLICKABLE);
+    }
+    lv_obj_clear_flag(wakeOkIcon, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(wakeOkIcon);
 #endif
 }
 

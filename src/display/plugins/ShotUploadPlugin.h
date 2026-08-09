@@ -31,6 +31,7 @@ class ShotUploadPlugin : public Plugin {
     static void uploadTask(void *arg);
 
     Controller *controller = nullptr;
+    PluginManager *pluginManager = nullptr;
     QueueHandle_t uploadQueue = nullptr;
     unsigned long lastWakeMs = 0;
     String pendingShotId;
