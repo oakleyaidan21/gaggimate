@@ -15,6 +15,7 @@ constexpr size_t UPLOAD_QUEUE_LEN = 8;
 constexpr unsigned long WAKE_CACHE_MS = 10UL * 60UL * 1000UL;
 constexpr uint32_t HTTP_TIMEOUT_MS = 90000;
 constexpr int MAX_ATTEMPTS = 3;
+constexpr uint32_t MAX_TIMESERIES_SAMPLES = 120;
 } // namespace
 
 ShotUploadPlugin ShotUpload;
@@ -155,21 +156,19 @@ String ShotUploadPlugin::buildPayload(const String &shotId) {
             yieldG = notes["doseOut"].as<float>();
         }
     }
-    if (yieldG <= 0.0f && header.sampleCount > 0) {
-        const size_t sampleSize = header.reserved0 > 0 ? header.reserved0 : SHOT_LOG_SAMPLE_SIZE;
-        if (sampleSize == sizeof(ShotLogSample)) {
-            const size_t offset = static_cast<size_t>(header.headerSize) + (header.sampleCount - 1) * sampleSize;
-            ShotLogSample sample{};
-            if (file.seek(offset) && file.read(reinterpret_cast<uint8_t *>(&sample), sizeof(sample)) == sizeof(sample)) {
-                if (sample.v > 0) {
-                    yieldG = static_cast<float>(sample.v) / 10.0f;
-                } else if (sample.ev > 0) {
-                    yieldG = static_cast<float>(sample.ev) / 10.0f;
-                }
+
+    const size_t sampleSize = header.reserved0 > 0 ? header.reserved0 : SHOT_LOG_SAMPLE_SIZE;
+    if (yieldG <= 0.0f && header.sampleCount > 0 && sampleSize == sizeof(ShotLogSample)) {
+        const size_t offset = static_cast<size_t>(header.headerSize) + (header.sampleCount - 1) * sampleSize;
+        ShotLogSample sample{};
+        if (file.seek(offset) && file.read(reinterpret_cast<uint8_t *>(&sample), sizeof(sample)) == sizeof(sample)) {
+            if (sample.v > 0) {
+                yieldG = static_cast<float>(sample.v) / 10.0f;
+            } else if (sample.ev > 0) {
+                yieldG = static_cast<float>(sample.ev) / 10.0f;
             }
         }
     }
-    file.close();
 
     JsonDocument doc;
     JsonObject shot = doc["shot"].to<JsonObject>();
@@ -204,6 +203,52 @@ String ShotUploadPlugin::buildPayload(const String &shotId) {
     if (!notes["notes"].isNull()) {
         shot["notes"] = notes["notes"].as<const char *>();
     }
+    if (!notes["rating"].isNull()) {
+        shot["rating"] = notes["rating"].as<int>();
+    }
+
+    if (header.phaseTransitionCount > 0) {
+        JsonArray phases = shot["phases"].to<JsonArray>();
+        const uint8_t count = header.phaseTransitionCount > 12 ? 12 : header.phaseTransitionCount;
+        for (uint8_t i = 0; i < count; ++i) {
+            const PhaseTransition &tr = header.phaseTransitions[i];
+            JsonObject phase = phases.add<JsonObject>();
+            phase["sample_index"] = tr.sampleIndex;
+            phase["phase_number"] = tr.phaseNumber;
+            phase["name"] = String(tr.phaseName);
+            phase["exit_reason"] = tr.transitionReason;
+        }
+    }
+
+    if (header.sampleCount > 0 && sampleSize == sizeof(ShotLogSample)) {
+        JsonObject timeseries = shot["timeseries"].to<JsonObject>();
+        const uint16_t intervalMs = header.sampleInterval > 0 ? header.sampleInterval : SHOT_LOG_SAMPLE_INTERVAL_MS;
+        timeseries["interval_ms"] = intervalMs;
+        timeseries["final_exit_reason"] = header.finalExitReason;
+        JsonArray samples = timeseries["samples"].to<JsonArray>();
+
+        uint32_t step = 1;
+        if (header.sampleCount > MAX_TIMESERIES_SAMPLES) {
+            step = (header.sampleCount + MAX_TIMESERIES_SAMPLES - 1) / MAX_TIMESERIES_SAMPLES;
+        }
+
+        ShotLogSample sample{};
+        for (uint32_t i = 0; i < header.sampleCount; i += step) {
+            const size_t offset = static_cast<size_t>(header.headerSize) + i * sampleSize;
+            if (!file.seek(offset) || file.read(reinterpret_cast<uint8_t *>(&sample), sizeof(sample)) != sizeof(sample)) {
+                break;
+            }
+            JsonObject row = samples.add<JsonObject>();
+            row["t"] = static_cast<int>(sample.t) * static_cast<int>(intervalMs);
+            row["ct"] = static_cast<float>(sample.ct) / 10.0f;
+            row["cp"] = static_cast<float>(sample.cp) / 10.0f;
+            row["fl"] = static_cast<float>(sample.fl) / 100.0f;
+            row["pf"] = static_cast<float>(sample.pf) / 100.0f;
+            row["v"] = static_cast<float>(sample.v) / 10.0f;
+            row["ev"] = static_cast<float>(sample.ev) / 10.0f;
+        }
+    }
+    file.close();
 
     String out;
     serializeJson(doc, out);
