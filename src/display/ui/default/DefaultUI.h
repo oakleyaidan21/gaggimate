@@ -120,6 +120,8 @@ class DefaultUI {
     bool pressureAvailable = false;
     int heatingFlash = 0;
     lv_obj_t *uploadButton = nullptr;
+    // EEZ deletes/recreates status screen widgets; remember which check_button we bound to.
+    lv_obj_t *uploadButtonCheck = nullptr;
     float pressure = 0.0f;
     float currentTemp = 0.0f;
     float targetTemp = 0.0f;

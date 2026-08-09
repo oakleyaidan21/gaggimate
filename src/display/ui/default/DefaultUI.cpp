@@ -288,6 +288,8 @@ void DefaultUI::loop() {
     }
 
     ui_tick();
+    // After EEZ applies check_button visibility for this frame.
+    updateUploadButton();
     lv_task_handler();
 }
 
@@ -547,13 +549,22 @@ void DefaultUI::updateState() {
         std::lock_guard<std::mutex> guard(profilesMutex);
         uiFlags.has_next_profile(currentProfileIdx + 1 < static_cast<int>(favoritedProfileIds.size()));
     }
-    updateUploadButton();
 }
 
 void DefaultUI::setupUploadButton() {
-    if (uploadButton != nullptr || objects.check_button == nullptr) {
+    if (objects.check_button == nullptr) {
+        // Status screen torn down — widgets are already deleted by EEZ.
+        uploadButton = nullptr;
+        uploadButtonCheck = nullptr;
         return;
     }
+    // Recreate when the status screen (and check_button) was rebuilt.
+    if (uploadButton != nullptr && uploadButtonCheck == objects.check_button) {
+        return;
+    }
+    uploadButton = nullptr;
+    uploadButtonCheck = objects.check_button;
+
     lv_obj_t *parent = lv_obj_get_parent(objects.check_button);
     if (parent == nullptr) {
         return;
